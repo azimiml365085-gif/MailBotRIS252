@@ -119,11 +119,15 @@ def process_mail():
                     html_body = part.get_payload(decode=True).decode(charset, errors="ignore")
                     body = html_to_text(html_body)
 
-                elif "attachment" in content_disposition:
+                elif "attachment" in content_disposition or "inline" in content_disposition:
                     filename = part.get_filename()
-                    if filename:
+                    if not filename:
+                    # Если имя не задано — генерируем его сами
+                    ext = part.get_content_subtype()  # jpeg, png, etc.
+                    filename = f"image.{ext}"
+                    else:
                         filename = decode_mime_words(filename)
-                        attachments.append((filename, part.get_payload(decode=True)))
+                    attachments.append((filename, part.get_payload(decode=True)))
         else:
             charset = msg.get_content_charset() or "utf-8"
             body = msg.get_payload(decode=True).decode(charset, errors="ignore")
