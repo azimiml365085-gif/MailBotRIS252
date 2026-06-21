@@ -22,6 +22,7 @@ SKIP_SENDER = "security@id.mail.ru"
 SEEN_FOLDER = "SeenByBot"
 # ===============================================
 
+
 def decode_mime_words(s):
     decoded = ""
     for word, enc in decode_header(s or ""):
@@ -62,11 +63,9 @@ def send_text_to_telegram(subject, sender, body):
 
 
 def send_file_to_telegram(filename, file_bytes):
-    # Создаем объект BytesIO из байтов файла
     file_io = BytesIO(file_bytes)
-    file_io.name = filename  # Даем имя файлу
+    file_io.name = filename
 
-    # Отправляем файл как документ
     files = {"document": (filename, file_io, "application/octet-stream")}
     requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument",
@@ -122,9 +121,8 @@ def process_mail():
                 elif "attachment" in content_disposition or "inline" in content_disposition:
                     filename = part.get_filename()
                     if not filename:
-                    # Если имя не задано — генерируем его сами
-                    ext = part.get_content_subtype()  # jpeg, png, etc.
-                    filename = f"image.{ext}"
+                        ext = part.get_content_subtype()  # jpeg, png, etc.
+                        filename = f"image.{ext}"
                     else:
                         filename = decode_mime_words(filename)
                     attachments.append((filename, part.get_payload(decode=True)))
