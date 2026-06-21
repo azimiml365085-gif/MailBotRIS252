@@ -3,7 +3,7 @@ name: Check Mail and Send to Telegram
 on:
   schedule:
     # Запуск каждые 30 минут
-    - cron: '*/30 * * * *'
+    - cron: '*/15 * * * *'
   # Возможность запустить вручную через интерфейс GitHub
   workflow_dispatch:
 
