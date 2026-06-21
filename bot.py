@@ -5,6 +5,7 @@ import html
 import time
 import traceback
 import os
+from io import BytesIO
 from email.header import decode_header
 from email.utils import parseaddr
 from bs4 import BeautifulSoup
@@ -61,7 +62,12 @@ def send_text_to_telegram(subject, sender, body):
 
 
 def send_file_to_telegram(filename, file_bytes):
-    files = {"document": (filename, file_bytes)}
+    # Создаем объект BytesIO из байтов файла
+    file_io = BytesIO(file_bytes)
+    file_io.name = filename  # Даем имя файлу
+
+    # Отправляем файл как документ
+    files = {"document": (filename, file_io, "application/octet-stream")}
     requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument",
         data={"chat_id": CHAT_ID},
