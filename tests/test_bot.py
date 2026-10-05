@@ -249,5 +249,112 @@ class TelegramAndImapSafetyTests(unittest.TestCase):
         self.assertNotIn("STORE", [command for command, _ in mail.calls])
 
 
+class PartialAttachmentDeliveryTests(unittest.TestCase):
+    class FakeMail:
+        def __init__(self, flags):
+            self.flags = flags
+
+        def uid(self, command, *args):
+            if command == "STORE":
+                self.flags.add(args[-1].strip("()").upper())
+            return "OK", [b"ok"]
+
+    class RecordingTelegram:
+        def __init__(self, fail_documents=False):
+            self.events = []
+            self.fail_documents = fail_documents
+
+        def send_message(self, text):
+            self.events.append(("message", text))
+
+        def send_document(self, attachment):
+            self.events.append(("document", attachment.filename))
+            if self.fail_documents:
+                raise TelegramError("Telegram отклонил отправку.")
+
+    @staticmethod
+    def make_email(filename="slides.pdf", payload=b"file bytes"):
+        msg = EmailMessage()
+        msg["From"] = "sender@example.org"
+        msg["Subject"] = "Test email"
+        msg.set_content("Body text must still be delivered.")
+        msg.add_attachment(
+            payload,
+            maintype="application",
+            subtype="pdf",
+            filename=filename,
+        )
+        return msg
+
+    @staticmethod
+    def make_settings():
+        return Settings(
+            imap_server="imap.example.org",
+            email_user="user@example.org",
+            email_password="placeholder",
+            telegram_token="placeholder",
+            telegram_chat_id="-100123",
+            skip_senders=(),
+        )
+
+    def run_process_one(self, msg, flags, telegram):
+        mail = self.FakeMail(flags)
+        with patch("bot.fetch_message", return_value=(msg, flags)):
+            with patch("bot.move_uid", return_value=True):
+                return process_one(
+                    mail,
+                    "123",
+                    self.make_settings(),
+                    telegram,
+                    set(),
+                    True,
+                )
+
+    def test_oversized_file_sends_text_and_warning_then_is_not_retried(self):
+        msg = self.make_email(payload=b"too large")
+        msg.add_attachment(
+            b"ok",
+            maintype="image",
+            subtype="png",
+            filename="diagram.png",
+        )
+        flags = set()
+        telegram = self.RecordingTelegram()
+
+        with patch("bot.MAX_TELEGRAM_FILE_BYTES", 3):
+            result = self.run_process_one(msg, flags, telegram)
+
+        self.assertEqual(result, "sent-with-attachment-warning")
+        self.assertEqual([event[0] for event in telegram.events], ["message", "message"])
+        self.assertIn("Body text must still be delivered", telegram.events[0][1])
+        self.assertIn("⚠️", telegram.events[1][1])
+        self.assertIn("slides.pdf", telegram.events[1][1])
+        self.assertIn("diagram.png", telegram.events[1][1])
+        self.assertIn("Откройте исходное письмо в Mail.ru", telegram.events[1][1])
+        self.assertIn("BOT_FAILED_FILE_0001", flags)
+        self.assertIn("BOT_ATTACHMENT_WARNING_SENT", flags)
+
+        retry_telegram = self.RecordingTelegram()
+        with patch("bot.MAX_TELEGRAM_FILE_BYTES", 3):
+            self.run_process_one(msg, flags, retry_telegram)
+        self.assertEqual(retry_telegram.events, [])
+
+    def test_telegram_rejection_of_one_file_does_not_block_text_or_warning(self):
+        msg = self.make_email()
+        flags = set()
+        telegram = self.RecordingTelegram(fail_documents=True)
+
+        result = self.run_process_one(msg, flags, telegram)
+
+        self.assertEqual(result, "sent-with-attachment-warning")
+        self.assertEqual(
+            [event[0] for event in telegram.events],
+            ["message", "document", "message"],
+        )
+        self.assertIn("Body text must still be delivered", telegram.events[0][1])
+        self.assertIn("Не все вложения удалось отправить", telegram.events[2][1])
+        self.assertIn("BOT_FAILED_FILE_0001", flags)
+
+
 if __name__ == "__main__":
     unittest.main()
