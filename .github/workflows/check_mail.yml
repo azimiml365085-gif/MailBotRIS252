@@ -1,9 +1,8 @@
 name: Check Mail and Send to Telegram
 
 on:
-  schedule:
-    # Запуск каждые 15 минут
-    - cron: '*/15 * * * *'
+  # Запуск по расписанию выполняет внешний cron-job.org через GitHub API.
+  # Не добавляй сюда schedule: это приведёт к двойным запускам.
   workflow_dispatch:
 
 permissions:
