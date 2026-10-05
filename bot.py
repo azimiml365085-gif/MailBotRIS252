@@ -49,6 +49,7 @@ DEFAULT_IMAP_TIMEOUT = 30
 FLAG_COMPLETE = "BOT_SENT_COMPLETE"
 FLAG_IGNORED = "BOT_IGNORED"
 FLAG_ARCHIVED = "BOT_ARCHIVED"
+FLAG_ATTACHMENT_WARNING = "BOT_ATTACHMENT_WARNING_SENT"
 
 
 class MailBotError(Exception):
@@ -806,12 +807,38 @@ def _attachment_marker(index: int) -> str:
     return f"BOT_SENT_FILE_{index:04d}"
 
 
-def _preflight_attachments(attachments: Iterable[Attachment]) -> None:
-    for attachment in attachments:
-        if len(attachment.content) > MAX_TELEGRAM_FILE_BYTES:
-            raise TelegramError(
-                f"Вложение {attachment.filename!r} больше допустимого размера Telegram; письмо оставлено в почте."
-            )
+def _failed_attachment_marker(index: int) -> str:
+    return f"BOT_FAILED_FILE_{index:04d}"
+
+
+def _attachment_failure_reason(
+    attachment: Attachment,
+    skip_all_due_to_oversize: bool = False,
+) -> str:
+    if len(attachment.content) > MAX_TELEGRAM_FILE_BYTES:
+        return "размер превышает лимит Telegram 50 МБ"
+    if skip_all_due_to_oversize:
+        return "не отправлено из-за другого вложения больше лимита 50 МБ"
+    return "Telegram не подтвердил доставку файла"
+
+
+def _attachment_warning_message(
+    failures: list[tuple[Attachment, str]],
+) -> str:
+    lines = [
+        "⚠️ <b>Не все вложения удалось отправить в Telegram</b>",
+        "Откройте исходное письмо в Mail.ru, чтобы скачать эти файлы:",
+    ]
+    for attachment, reason in failures[:3]:
+        filename = html.escape(
+            truncate_utf16(attachment.filename, 120), quote=False
+        )
+        lines.append(f"• <code>{filename}</code> — {html.escape(reason, quote=False)}")
+    if len(failures) > 3:
+        lines.append(f"• Ещё {len(failures) - 3} вложений не доставлено.")
+    message = "\n".join(lines)
+    _validate_telegram_message(message)
+    return message
 
 
 def process_one(
@@ -870,7 +897,6 @@ def process_one(
         content.attachments,
         max_text_messages=settings.max_text_messages,
     )
-    _preflight_attachments(plan.attachments)
 
     for index, text_message in enumerate(plan.messages, start=1):
         marker = _message_marker(index)
@@ -881,14 +907,61 @@ def process_one(
             add_uid_flag(mail, uid, marker)
             flags.add(marker)
 
+    attachment_failures: list[tuple[Attachment, str]] = []
+    skip_all_due_to_oversize = any(
+        len(attachment.content) > MAX_TELEGRAM_FILE_BYTES
+        for attachment in plan.attachments
+    )
     for index, attachment in enumerate(plan.attachments, start=1):
-        marker = _attachment_marker(index)
-        if user_flags_supported and marker in flags:
+        sent_marker = _attachment_marker(index)
+        failed_marker = _failed_attachment_marker(index)
+        if user_flags_supported and sent_marker in flags:
             continue
-        telegram.send_document(attachment)
+        if user_flags_supported and failed_marker in flags:
+            attachment_failures.append(
+                (
+                    attachment,
+                    _attachment_failure_reason(
+                        attachment,
+                        skip_all_due_to_oversize=skip_all_due_to_oversize,
+                    ),
+                )
+            )
+            continue
+
+        failure_reason: str | None = None
+        if skip_all_due_to_oversize:
+            failure_reason = _attachment_failure_reason(
+                attachment,
+                skip_all_due_to_oversize=True,
+            )
+        else:
+            try:
+                telegram.send_document(attachment)
+            except TelegramError:
+                failure_reason = _attachment_failure_reason(attachment)
+
+        if failure_reason:
+            attachment_failures.append((attachment, failure_reason))
+            LOGGER.warning(
+                "Не удалось доставить вложение %r: %s.",
+                attachment.filename,
+                failure_reason,
+            )
+            if user_flags_supported:
+                add_uid_flag(mail, uid, failed_marker)
+                flags.add(failed_marker)
+            continue
+
         if user_flags_supported:
-            add_uid_flag(mail, uid, marker)
-            flags.add(marker)
+            add_uid_flag(mail, uid, sent_marker)
+            flags.add(sent_marker)
+
+    if attachment_failures and FLAG_ATTACHMENT_WARNING not in flags:
+        telegram.send_message(_attachment_warning_message(attachment_failures))
+        if user_flags_supported:
+            add_uid_flag(mail, uid, FLAG_ATTACHMENT_WARNING)
+            flags.add(FLAG_ATTACHMENT_WARNING)
 
     if user_flags_supported:
         add_uid_flag(mail, uid, FLAG_COMPLETE)
@@ -908,8 +981,12 @@ def process_one(
             uid,
             settings.seen_folder,
         )
-        return "sent-but-left-in-inbox"
-    return "sent"
+        return (
+            "sent-with-attachment-warning-but-left-in-inbox"
+            if attachment_failures
+            else "sent-but-left-in-inbox"
+        )
+    return "sent-with-attachment-warning" if attachment_failures else "sent"
 
 
 def process_mail(settings: Settings | None = None) -> int:
