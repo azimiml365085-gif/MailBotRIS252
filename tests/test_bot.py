@@ -105,6 +105,23 @@ class LongTextTests(unittest.TestCase):
         self.assertEqual(plan.attachments[0].filename, "email_body.txt")
         self.assertEqual(plan.attachments[0].content.decode("utf-8"), source)
         self.assertIn("полный текст отправлен файлом", plan.messages[0])
+        self.assertIn("<blockquote expandable>", plan.messages[0])
+
+    def test_email_body_is_inside_expandable_quote_below_header(self):
+        plan = build_delivery_plan(
+            "Тема письма",
+            "Учебный офис <office@example.org>",
+            "Содержание письма",
+            (),
+        )
+
+        message = plan.messages[0]
+        self.assertIn(
+            "<blockquote expandable>Содержание письма</blockquote>",
+            message,
+        )
+        self.assertLess(message.index("<b>Тема:</b>"), message.index("<blockquote expandable>"))
+        self.assertIn("<b>От:</b>", message)
 
     def test_text_messages_stay_within_safe_budget(self):
         source = "слово " * 1800
