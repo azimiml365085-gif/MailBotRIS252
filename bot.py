@@ -473,7 +473,8 @@ def build_delivery_plan(
         message = (
             f"{prefix}\n\n"
             "Письмо длинное: полный текст отправлен файлом <code>email_body.txt</code>.\n\n"
-            f"<b>Начало письма:</b>\n{html.escape(preview, quote=False)}"
+            "<b>Начало письма:</b>\n"
+            f"<blockquote expandable>{html.escape(preview, quote=False)}</blockquote>"
         )
         _validate_telegram_message(message)
         body_attachment = Attachment(
@@ -493,7 +494,10 @@ def build_delivery_plan(
         else:
             safe_subject = html.escape(truncate_utf16(subject, 160), quote=True)
             heading = f"<b>Продолжение письма {index}/{total}</b>\n<b>Тема:</b> {safe_subject}"
-        message = f"{heading}\n\n{html.escape(chunk, quote=False)}"
+        message = (
+            f"{heading}\n\n"
+            f"<blockquote expandable>{html.escape(chunk, quote=False)}</blockquote>"
+        )
         _validate_telegram_message(message)
         messages.append(message)
 
